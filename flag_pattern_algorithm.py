@@ -2,6 +2,7 @@ import pandas as pd  # 用于数据处理和分析
 import numpy as np   # 用于数值计算
 import matplotlib.pyplot as plt  # 用于数据可视化
 import mplfinance as mpf  # 用于绘制金融图表
+from matplotlib import style
 from important_point_algorithm import find_pips, directional_change, rw_top, rw_bottom # 导入感知重要点(PIP)识别函数
 from trendline_automation import fit_trendlines_single  # 导入趋势线拟合函数
 from dataclasses import dataclass
@@ -615,7 +616,7 @@ def plot_flag(candle_data: pd.DataFrame, pattern: FlagPattern, pad=2):
     # 'seaborn-pastel', 'seaborn-poster', 'seaborn-talk',
     # 'seaborn-ticks', 'seaborn-white', 'seaborn-whitegrid',
     # 'tableau-colorblind10'
-    plt.style.use('seaborn-v0_8-bright')  
+    # plt.style.use('seaborn-v0_8-bright')  
     fig = plt.gcf()
     ax = fig.gca()  # ax是matplotlib中的坐标轴对象,gca()表示获取当前图形的坐标轴(get current axes)
 
@@ -630,14 +631,46 @@ def plot_flag(candle_data: pd.DataFrame, pattern: FlagPattern, pad=2):
 
     # 绘制K线图和趋势线
     # 设置K线图的颜色样式
+
+    # 创建自定义样式
+    # 这里使用base_mpl_style而不是base_mpf_style是因为:
+    # 1. base_mpl_style用于设置matplotlib的基础样式,包括颜色、字体等基础绘图元素
+    # 2. base_mpf_style主要用于设置mplfinance专有的金融图表样式
+    # 3. 我们这里想要应用seaborn的整体视觉风格,这属于matplotlib的基础样式范畴
+    
+    # mplfinance提供的base_mpf_style选项包括:
+    # 'binance' - 币安交易所风格
+    # 'charles' - 经典图表风格
+    # 'mike' - 现代简约风格
+    # 'nightclouds' - 深色主题
+    # 'sas' - SAS软件风格
+    # 'starsandstripes' - 星条旗主题
+    # 'yahoo' - 雅虎财经风格
+    
+    # 而base_mpl_style可以使用matplotlib支持的所有样式,包括:
+    # 'seaborn' 系列、'ggplot'、'bmh'等更丰富的选择seaborn-v0_8-bright
     mc = mpf.make_marketcolors(up='red',          # 上涨蜡烛颜色
                               down='green',        # 下跌蜡烛颜色
                               edge='inherit',      # 边框颜色继承自up/down
                               volume='in',         # 成交量颜色跟随K线
                               wick='inherit')      # 上下影线继承自up/down
     
-    # 创建自定义样式
-    s = mpf.make_mpf_style(marketcolors=mc)
+    # 可用的base_mpf_style包括:
+    # 'binance' - 币安交易所风格
+    # 'charles' - 经典图表风格
+    # 'mike' - 现代简约风格
+    # 'nightclouds' - 深色主题
+    # 'sas' - SAS软件风格
+    # 'starsandstripes' - 星条旗主题
+    # 'yahoo' - 雅虎财经风格
+    
+    # 直接使用make_mpf_style创建样式，不再使用make_base_mpf_style
+    # 'charles'是mplfinance内置的样式之一
+    s = mpf.make_mpf_style(
+        marketcolors=mc,
+        base_mpl_style="seaborn"  # 直接指定基础样式为'charles'
+    )
+    
     
     # 绘制K线图和趋势线
     mpf.plot(dat, 
