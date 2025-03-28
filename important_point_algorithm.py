@@ -7,6 +7,13 @@ import numpy as np
 # data: 价格数据数组
 # curr_index: 当前检查的索引位置
 # order: 窗口大小的一半（窗口总大小 = 2*order + 1）
+# 这个函数确实是在检查 k 点（即 curr_index - order）是否是局部最大值点。函数的逻辑是：
+# 计算窗口中心点 k = curr_index - order
+# 获取中心点的价格值 v = data[k]
+# 检查中心点前后各 order 个点的价格
+# 如果窗口内有任何一个点的价格高于中心点，则 k 点不是顶部
+# 只有当 k 点的价格高于或等于窗口内所有其他点时，才认为它是局部顶部（最大值点）
+# 这是一个典型的滚动窗口方法来识别价格数据中的局部极值点。
 def rw_top(data: np.array, curr_index: int, order: int) -> bool:
     # 如果当前索引小于窗口大小，无法形成完整窗口，返回False
     if curr_index < order * 2 + 1:  # 加1是因为窗口总大小为2*order+1,中心点需要前后各order个点,总共需要2*order+1个点
