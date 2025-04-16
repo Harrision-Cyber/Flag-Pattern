@@ -1,15 +1,58 @@
+'''=============================================================================================================================='''
+
 import pandas as pd  # 用于数据处理和分析
 import numpy as np   # 用于数值计算
 import matplotlib.pyplot as plt  # 用于数据可视化
 import mplfinance as mpf  # 用于绘制金融图表
-from matplotlib import style
-from important_point_algorithm import find_pips, directional_change, rw_top, rw_bottom # 导入感知重要点(PIP)识别函数
+# from perceptually_important import find_pips  # 导入感知重要点(PIP)识别函数
+# from rolling_window import rw_top, rw_bottom  # 导入滚动窗口极值识别函数
 from trendline_automation import fit_trendlines_single  # 导入趋势线拟合函数
 from dataclasses import dataclass
+from tqdm import tqdm
+import time
+from datetime import datetime
+# 导入plotly的graph_objects模块，这是用于创建交互式图表的库
+# go是graph_objects的缩写，提供了各种图表类型如折线图、柱状图、散点图等
+# 这个库可以创建高度交互式的可视化图表，支持缩放、悬停信息显示等功能
+import plotly.graph_objects as go
+import os
+from WindPy import w
+
+'''=============================================================================================================================='''
+
+def get_stock_data(code, start_date, end_date):
+    """
+    从Wind获取股票数据
+    
+    参数:
+    code: 股票代码
+    start_date: 开始日期，格式'YYYY-MM-DD'
+    end_date: 结束日期，格式'YYYY-MM-DD'
+    
+    返回:
+    DataFrame: 包含股票数据的DataFrame
+    """
+    wind_data = w.wsd(code, "close,open,high,low,volume,pct_chg", start_date, end_date, "PriceAdj=F;priceUnit=1;precision=0")
+    
+    if wind_data.ErrorCode != 0:
+        print(f"获取数据出错: {wind_data.Data}")
+        return None
+        
+    # 转换为DataFrame
+    df = pd.DataFrame(data=wind_data.Data, 
+                     index=wind_data.Fields, 
+                     columns=wind_data.Times).T
+    
+    # 重命名列以匹配yfinance格式
+    df.columns = ['Close', 'Open', 'High', 'Low', 'Volume', 'Change']
+    df.index.name = 'Date'
+    
+    print(f"成功获取{code}的数据，共{len(df)}条记录")
+    return df
 
 
 
-
+'''=============================================================================================================================='''
 # 这是Python的一个装饰器,用来简化类的定义。它会自动帮我们生成__init__()等基础方法,让我们只需要定义类的属性就可以了,不用写很多重复的代码。
 #__init__()是类的构造函数,当我们创建类的实例时会自动调用它来初始化实例的属性。比如定义一个普通的类需要写构造函数,而用@dataclass就不用写了。
 @dataclass  
@@ -76,6 +119,7 @@ def check_bear_pattern_pips(pending: FlagPattern, data: np.array, i:int, order:i
     # 它从原始数组data中提取了从pending.base_x到i的这一段数据
     # argmin()返回切片中最小值的索引位置
     # 由于切片是原始数组的一部分,所以需要加上切片起点pending.base_x才是在原始数组中的实际位置
+    
     min_i = data_slice.argmin() + pending.base_x  # 自局部顶部以来的最低点索引
     
     # 确保从最低点到当前位置有足够的距离来形成旗帜
@@ -115,6 +159,8 @@ def check_bear_pattern_pips(pending: FlagPattern, data: np.array, i:int, order:i
     support_rise = pips_y[2] - pips_y[0]  # 支撑线上升高度
     support_run = pips_x[2] - pips_x[0]  # 支撑线水平距离
     support_slope = support_rise / support_run  # 支撑线斜率
+       
+
     support_intercept = pips_y[0]  # 支撑线截距
     
     # 阻力线：连接第2个和第4个PIP点
@@ -239,6 +285,10 @@ def check_bull_pattern_pips(pending: FlagPattern, data: np.array, i:int, order:i
     support_run = pips_x[3] - pips_x[1]  # 支撑线水平距离
     support_slope = support_rise / support_run  # 支撑线斜率
     support_intercept = pips_y[1] + (pips_x[0] - pips_x[1]) * support_slope  # 支撑线截距
+
+
+
+
 
     # 计算两条线的交点
     if resist_slope != support_slope:  # 非平行线
@@ -392,25 +442,9 @@ def check_bull_pattern_trendline(pending: FlagPattern, data: np.array, i:int, or
     
     返回:
     bool - 如果识别到有效形态则返回True，否则返回False
-
-
-    函数的主要逻辑步骤：
-    1.首先检查旗杆顶部之后的价格是否超过旗杆顶部价格，如果超过则返回False（不符合牛市旗形条件）
-    2.找出旗帜部分的最低价格
-    3.计算旗杆和旗帜的高度和宽度
-    4.检查旗帜宽度是否小于旗杆宽度的一半，如果不是则返回False
-    5.检查旗帜高度是否小于旗杆高度的75%，如果不是则返回False
-    6.使用趋势线拟合算法找出旗帜部分的支撑线和阻力线
-    7.检查当前价格是否突破上趋势线（阻力线），如果没有则返回False
-    8.判断是旗形还是三角旗：如果支撑线向上倾斜（斜率为正），则为三角旗
-    9.如果所有条件都满足，填充旗形对象的属性并返回True
-
     """
     
     # 检查旗杆顶部之后的价格是否超过旗杆顶部价格
-    #  切片：array[start:end] 会取出从索引 start 到索引 end-1 的元素。也就是说，它包含起始索引，但不包含结束索引
-    # data[pending.tip_x + 1 : i] 的取值区间是从 pending.tip_x + 1 到 i - 1 的所有元素。
-
     if data[pending.tip_x + 1 : i].max() > pending.tip_y:
         return False
 
@@ -429,7 +463,7 @@ def check_bull_pattern_trendline(pending: FlagPattern, data: np.array, i:int, or
         return False
 
     # 旗帜高度应小于旗杆高度的75%
-    if flag_height > pole_height * 0.5:
+    if flag_height > pole_height * 0.75:
         return False
 
     # 使用趋势线拟合算法找出旗帜部分的支撑线和阻力线
@@ -497,7 +531,7 @@ def check_bear_pattern_trendline(pending: FlagPattern, data: np.array, i:int, or
         return False
 
     # 旗帜高度应小于旗杆高度的75%
-    if flag_height > pole_height * 0.5:
+    if flag_height > pole_height * 0.75:
         return False
 
     # 使用趋势线拟合算法找出旗帜部分的支撑线和阻力线
@@ -560,49 +594,15 @@ def find_flags_pennants_trendline(data: np.array, order:int):
     # 遍历价格数据
     for i in range(len(data)):
 
-        '''
-        这段代码是识别股票价格中的"牛市旗形"模式的核心部分。它的主要逻辑是：
-        遍历价格数据：循环处理每个价格点。
-        识别局部高点：使用rw_top函数检测当前位置是否为局部高点（价格峰值）。这个函数使用滚动窗口方法，检查某个点是否高于其前后一定范围内的所有点。
-        构建牛市旗形：
-        当找到局部高点，并且之前已经有局部底部时，可以形成潜在的牛市旗形
-        牛市旗形的结构是：从低点开始上升到高点（形成"旗杆"），然后在高点后形成一个整合区域（"旗帜"部分）
-        创建旗形对象：
-        创建FlagPattern对象，记录旗杆的起点（底部）和终点（顶部）
-        底部作为旗杆的起始点，顶部作为旗杆的终点和旗帜的起始点
-        将这个潜在的旗形保存在pending_bull变量中，等待后续确认
-        这段代码只是识别过程的第一步，后续还会检查这个潜在形态是否符合旗形或三角旗的所有条件。
-        '''
-
         # 识别局部极值点
         if rw_top(data, i, order):  # 如果是局部高点
-            # 使用rw_top函数检测当前位置i是否为局部高点（顶部）
-            # 这个函数确实是在检查 i-order 点（即 i - order）是否是局部最大值点。函数的逻辑是：
-            # 计算窗口中心点 k = i - order
-            # 获取中心点的价格值 v = data[k]
-            # 检查中心点前后各 order 个点的价格
-            # 如果窗口内有任何一个点的价格高于中心点，则 k 点不是顶部
-            # 只有当 k 点的价格高于或等于窗口内所有其他点时，才认为它是局部顶部（最大值点）
-            # rw_top函数使用滚动窗口方法，检查窗口中心点是否高于窗口内所有其他点
-            
             last_top = i - order  # 更新最近的局部顶部索引
-            # 由于rw_top函数中窗口中心点的位置是i-order，所以这里记录实际的顶部位置
-            
             if last_bottom != -1:  # 如果已有局部底部
-                # 只有当之前已经找到了一个局部底部时，才能形成潜在的牛市旗形
-                # 牛市旗形需要先有底部（起点），然后是顶部（旗杆顶端）
-                
                 # 创建新的牛市形态对象，从底部到顶部
                 pending = FlagPattern(last_bottom, data[last_bottom])
-                # 初始化FlagPattern对象，设置base_x为底部索引，base_y为底部价格
-                # 这里的底部是旗杆的起点（牛市旗形从低到高）
-                
-                pending.tip_x = last_top  # 设置旗杆顶部索引
-                pending.tip_y = data[last_top]  # 设置旗杆顶部价格
-                # tip_x和tip_y表示旗杆的顶端，也是旗帜部分的起始点
-                
-                pending_bull = pending  # 将创建的形态对象赋值给pending_bull变量
-                # 这个对象会在后续循环中被检查是否形成完整的牛市旗形或三角旗
+                pending.tip_x = last_top  # 设置旗杆顶部
+                pending.tip_y = data[last_top]
+                pending_bull = pending
         
         if rw_bottom(data, i, order):  # 如果是局部低点
             last_bottom = i - order  # 更新最近的局部底部索引
@@ -612,26 +612,6 @@ def find_flags_pennants_trendline(data: np.array, order:int):
                 pending.tip_x = last_bottom  # 设置旗杆底部
                 pending.tip_y = data[last_bottom]
                 pending_bear = pending
-
-
-                # 这段代码是识别股票价格中"熊市旗形"模式的关键部分。具体逻辑如下：
-                # 检测局部低点：rw_bottom(data, i, order)函数使用滚动窗口方法检查i-order是否为局部低点（价格谷值）。
-                # 记录低点位置：如果检测到局部低点，将last_bottom更新为实际低点位置（i-order）。
-                # 检查旗形条件：if last_top != -1检查是否已有局部顶部记录。熊市旗形需要先有顶部（起点），然后是底部（旗杆底端）。
-                # 创建熊市旗形对象：
-                # 创建FlagPattern对象，设置base_x和base_y为顶部坐标（旗杆起点）
-                # 设置tip_x和tip_y为底部坐标（旗杆底端）
-                # 将这个潜在旗形保存在pending_bear变量中等待后续确认
-                # 这段代码识别的是熊市旗形的"旗杆"部分（从高点到低点的下跌走势），后续代码会继续检查是否形成完整的旗形或三角旗形态。
-
-                # 由于FlagPattern是使用@dataclass装饰器定义的，并且tip_x和tip_y已经有默认值(-1和-1.0)，所以它的构造函数已经支持传入2个或4个参数。
-                # 但要注意参数顺序必须正确。根据类定义，正确的参数顺序应该是：
-                # FlagPattern(base_x, base_y, tip_x, tip_y)
-                # 所以如果要一次性传入四个参数，应该是：
-                # pending = FlagPattern(last_top, data[last_top], last_bottom, data[last_bottom])
-                # 这样base_x和base_y会设置为顶部坐标，tip_x和tip_y会设置为底部坐标，符合熊市旗形的逻辑。
-
-
 
         # 检查并处理待处理的熊市形态
         if pending_bear is not None:
@@ -686,7 +666,7 @@ def plot_flag(candle_data: pd.DataFrame, pattern: FlagPattern, pad=2):
     # 'seaborn-pastel', 'seaborn-poster', 'seaborn-talk',
     # 'seaborn-ticks', 'seaborn-white', 'seaborn-whitegrid',
     # 'tableau-colorblind10'
-    # plt.style.use('seaborn-v0_8-bright')  
+    plt.style.use('seaborn-v0_8-bright')  
     fig = plt.gcf()
     ax = fig.gca()  # ax是matplotlib中的坐标轴对象,gca()表示获取当前图形的坐标轴(get current axes)
 
@@ -701,46 +681,14 @@ def plot_flag(candle_data: pd.DataFrame, pattern: FlagPattern, pad=2):
 
     # 绘制K线图和趋势线
     # 设置K线图的颜色样式
-
-    # 创建自定义样式
-    # 这里使用base_mpl_style而不是base_mpf_style是因为:
-    # 1. base_mpl_style用于设置matplotlib的基础样式,包括颜色、字体等基础绘图元素
-    # 2. base_mpf_style主要用于设置mplfinance专有的金融图表样式
-    # 3. 我们这里想要应用seaborn的整体视觉风格,这属于matplotlib的基础样式范畴
-    
-    # mplfinance提供的base_mpf_style选项包括:
-    # 'binance' - 币安交易所风格
-    # 'charles' - 经典图表风格
-    # 'mike' - 现代简约风格
-    # 'nightclouds' - 深色主题
-    # 'sas' - SAS软件风格
-    # 'starsandstripes' - 星条旗主题
-    # 'yahoo' - 雅虎财经风格
-    
-    # 而base_mpl_style可以使用matplotlib支持的所有样式,包括:
-    # 'seaborn' 系列、'ggplot'、'bmh'等更丰富的选择seaborn-v0_8-bright
     mc = mpf.make_marketcolors(up='red',          # 上涨蜡烛颜色
                               down='green',        # 下跌蜡烛颜色
                               edge='inherit',      # 边框颜色继承自up/down
                               volume='in',         # 成交量颜色跟随K线
                               wick='inherit')      # 上下影线继承自up/down
     
-    # 可用的base_mpf_style包括:
-    # 'binance' - 币安交易所风格
-    # 'charles' - 经典图表风格
-    # 'mike' - 现代简约风格
-    # 'nightclouds' - 深色主题
-    # 'sas' - SAS软件风格
-    # 'starsandstripes' - 星条旗主题
-    # 'yahoo' - 雅虎财经风格
-    
-    # 直接使用make_mpf_style创建样式，不再使用make_base_mpf_style
-    # 'charles'是mplfinance内置的样式之一
-    s = mpf.make_mpf_style(
-        marketcolors=mc,
-        base_mpl_style="seaborn"  # 直接指定基础样式为'charles'
-    )
-    
+    # 创建自定义样式
+    s = mpf.make_mpf_style(marketcolors=mc)
     
     # 绘制K线图和趋势线
     mpf.plot(dat, 
@@ -754,5 +702,386 @@ def plot_flag(candle_data: pd.DataFrame, pattern: FlagPattern, pad=2):
 
 
 
+'''=============================================================================================================================='''
+from matplotlib import pyplot as plt
 
 
+def find_pips(data: np.array, n_pips: int, dist_measure: int):
+    # 确保数据有足够的点
+    if len(data) < 2:
+        print("错误：数据点数不足，无法找到重要点")
+        return [0], [data[0]] if len(data) > 0 else [0], [0]
+    
+    # 初始化，将起点和终点作为第一批重要点
+    pips_x = [0, len(data) - 1]
+    pips_y = [data[0], data[-1]]
+    
+    print(f"初始化 pips_x: {pips_x}, pips_y: {pips_y}")
+    
+    # 迭代添加n_pips-2个重要点
+    for curr_point in range(2, n_pips):
+        md = 0.0
+        md_i = -1
+        insert_index = -1
+
+        print(f"\n开始第{curr_point}轮迭代，当前 pips_x: {pips_x}")
+        
+        # 遍历当前已有的重要点之间的所有区间
+        for k in range(0, curr_point - 1):
+            left_adj = k
+            right_adj = k + 1
+            
+            # 验证索引值有效性
+            if pips_x[left_adj] < 0 or pips_x[right_adj] < 0:
+                print(f"警告：发现无效索引值 pips_x[{left_adj}]={pips_x[left_adj]}, pips_x[{right_adj}]={pips_x[right_adj]}")
+                continue
+                
+            # 添加调试信息
+            print(f"\n=== Debug Info (curr_point={curr_point}, k={k}) ===")
+            print(f"left_adj: {left_adj}, right_adj: {right_adj}")
+            print(f"pips_x[left_adj]: {pips_x[left_adj]}, pips_x[right_adj]: {pips_x[right_adj]}")
+            print(f"pips_y[left_adj]: {pips_y[left_adj]}, pips_y[right_adj]: {pips_y[right_adj]}")
+
+
+            # 计算这两个重要点之间的直线方程 y = slope * x + intercept
+            # 用于后续计算其他点到这条线段的距离
+            time_diff = pips_x[right_adj] - pips_x[left_adj]
+            price_diff = pips_y[right_adj] - pips_y[left_adj]
+            slope = price_diff / time_diff  # 计算斜率
+            intercept = pips_y[left_adj] - pips_x[left_adj] * slope  # 计算截距
+
+            print(f"time_diff: {time_diff}")
+            print(f"price_diff: {price_diff}")
+
+            print(f"calculated slope: {slope}")
+            print(f"calculated intercept: {intercept}")
+
+            # 遍历两个重要点之间的所有点
+            for i in range(pips_x[left_adj] + 1, pips_x[right_adj]):
+                d = 0.0  # 距离
+                
+                # 根据选择的距离度量方式计算距离
+                if dist_measure == 1:  # 欧几里得距离
+                    # 计算点到左右两个重要点的欧几里得距离之和
+                    d = ((pips_x[left_adj] - i) ** 2 + (pips_y[left_adj] - data[i]) ** 2) ** 0.5
+                    d += ((pips_x[right_adj] - i) ** 2 + (pips_y[right_adj] - data[i]) ** 2) ** 0.5
+                elif dist_measure == 2:  # 垂直距离（点到直线的垂直距离）
+                    # 计算点到直线的垂直距离
+                    # 这里计算的是点到直线的垂直距离
+                    # 例如: 假设有一条直线 y = 2x + 1, 点P(3,8)
+                    # slope = 2 (斜率)
+                    # intercept = 1 (截距) 
+                    # i = 3 (x坐标)
+                    # data[i] = 8 (y坐标)
+                    # 代入公式: |2*3 + 1 - 8| / sqrt(2^2 + 1) = |7-8| / sqrt(5) = 1/sqrt(5)
+                    # 计算点到直线的垂直距离:
+                    # 1. slope * i + intercept 计算直线在该点x坐标处的y值
+                    # 2. data[i] 是该点实际的y值
+                    # 3. 两者相减得到垂直差值
+                    # 4. 除以 sqrt(slope^2 + 1) 将差值转换为垂直距离
+                    # 5. abs() 取绝对值,因为我们只关心距离大小,不关心方向
+                    d = abs((slope * i + intercept) - data[i]) / (slope ** 2 + 1) ** 0.5
+                else:  # 垂直距离（点到直线的垂直距离，不考虑斜率）
+                    # 计算点到直线的垂直距离（简化版）
+                    d = abs((slope * i + intercept) - data[i])
+
+                # 如果找到更大的距离，更新最大距离和对应的索引
+                if d > md:
+                    md = d
+                    # 记录当前找到的最大距离点的索引i
+                    md_i = i
+                    # right_adj是当前区间右端点的位置,将新点插入到right_adj位置
+                    insert_index = right_adj
+
+        # 将新找到的重要点插入到重要点列表中
+        pips_x.insert(insert_index, md_i)
+        pips_y.insert(insert_index, data[md_i])
+        print(f"插入新点后 pips_x: {pips_x}")
+
+    return pips_x, pips_y
+
+
+
+
+
+'''=============================================================================================================================='''
+
+# 检测局部顶部的函数
+# data: 价格数据数组
+# curr_index: 当前检查的索引位置
+# order: 窗口大小的一半（窗口总大小 = 2*order + 1）
+def rw_top(data: np.array, curr_index: int, order: int) -> bool:
+    # 如果当前索引小于窗口大小，无法形成完整窗口，返回False
+    if curr_index < order * 2 + 1:  # 加1是因为窗口总大小为2*order+1,中心点需要前后各order个点,总共需要2*order+1个点
+        return False
+
+    top = True  # 假设是顶部
+    # k 的取值范围是：[order+1, len(data)-order]
+    # 原因：k作为中心点需要保证其前后各有order个点用于比较。
+    k = curr_index - order  # 计算中心点索引 
+    v = data[k]  # 中心点的价格值
+    
+    # 检查中心点前后各order个点的价格
+    # 如果有任何一个点的价格高于中心点，则不是顶部
+    #range(1, order + 1) 的取值范围是从 1 到 order（包含 order）的整数序列。例如，如果 order = 3，则取值为 1, 2, 3。
+    
+    # 从0开始遍历会导致k+i和k-i的索引超出范围
+    # 因为k是中心点,需要前后各order个点进行比较
+    # 所以i必须从1开始,这样k±i才能正确访问窗口内的点
+    for i in range(1, order + 1):
+        if data[k + i] > v or data[k - i] > v:
+            top = False
+            break
+    
+    return top
+
+# 检测局部底部的函数
+# data: 价格数据数组
+# curr_index: 当前检查的索引位置
+# order: 窗口大小的一半（窗口总大小 = 2*order + 1）
+def rw_bottom(data: np.array, curr_index: int, order: int) -> bool:
+    # 如果当前索引小于窗口大小，无法形成完整窗口，返回False
+    if curr_index < order * 2 + 1:
+        return False
+
+    bottom = True  # 假设是底部
+    k = curr_index - order  # 计算中心点索引
+    v = data[k]  # 中心点的价格值
+    
+    # 检查中心点前后各order个点的价格
+    # 如果有任何一个点的价格低于中心点，则不是底部
+    for i in range(1, order + 1):
+        if data[k + i] < v or data[k - i] < v:
+            bottom = False
+            break
+    
+    return bottom
+
+# 找出所有极值点的函数
+# data: 价格数据数组
+# order: 窗口大小的一半
+def rw_extremes(data: np.array, order:int):
+    # 初始化存储顶部和底部的列表
+    tops = []
+    bottoms = []
+    
+    # 遍历整个数据集，i的取值范围是从0到data数组长度减1。根据上下文可以看到，data是一个包含7320行的价格数据数组，所以i的取值范围是0到7319。
+    # range(len(data))会根据这个长度生成一个从0开始到len(data)-1的整数序列
+
+    for i in range(len(data)):
+        # 检查是否是顶部
+        if rw_top(data, i, order):
+            # 记录顶部信息：
+            # top[0] = 确认索引（当前索引i）
+            # top[1] = 顶部索引（i - order，即窗口中心）
+            # top[2] = 顶部价格
+            # 创建一个包含顶部信息的列表:
+            # i: 当前确认索引位置
+            # i - order: 顶部实际位置(窗口中心)
+            # data[i - order]: 顶部价格值
+            top = [i, i - order, data[i - order]]
+            tops.append(top)  # 将找到的顶部点信息添加到tops列表中
+        
+        # 检查是否是底部
+        if rw_bottom(data, i, order):
+            # 记录底部信息：
+            # bottom[0] = 确认索引（当前索引i）
+            # bottom[1] = 底部索引（i - order，即窗口中心）
+            # bottom[2] = 底部价格
+            bottom = [i, i - order, data[i - order]]
+            bottoms.append(bottom)
+    
+    return tops, bottoms
+
+
+
+
+
+
+
+
+
+
+
+'''=============================================================================================================================='''
+# 主程序（当直接运行此文件时执行）
+if __name__ == '__main__':
+    # 加载数据
+  
+    # 对价格取对数
+    # 对除Change列外的所有列取对数
+    # 将日期索引转换为DatetimeIndex格式
+
+    # 初始化Wind API
+    w.start()
+    # "000004.SZ",
+    data_raw = get_stock_data("000004.SZ", "2018-01-05", "2019-04-10")
+
+    data = data_raw.copy()
+
+    data.index = pd.to_datetime(data.index).copy()
+
+    # # 给data中的Close每一行随机加一个非常小的数
+    # np.random.seed(42)  # 设置随机种子，确保结果可重现
+    # small_noise = np.random.uniform(0.00001, 0.00009, size=len(data))
+    # data['Close'] = data['Close'] + small_noise
+    
+    # 对价格数据取对数，排除Change和Volume列
+    data.loc[:, ~data.columns.isin(['Change', 'Volume'])] = np.log(data.loc[:, ~data.columns.isin(['Change', 'Volume'])]).copy()
+
+    # 提取收盘价数据
+
+
+ 
+    dat_slice = data['Close'].to_numpy().copy()
+
+
+    # 识别旗形和三角旗
+    bull_flags, bear_flags, bull_pennants, bear_pennants = find_flags_pennants_pips(dat_slice, 5)  # 使用PIP点方法
+    #bull_flags, bear_flags, bull_pennants, bear_pennants = find_flags_pennants_trendline(dat_slice, 10)  # 使用趋势线方法
+
+    # 创建数据框来存储形态属性
+    bull_flag_df = pd.DataFrame()
+    bull_pennant_df = pd.DataFrame()
+    bear_flag_df = pd.DataFrame()
+    bear_pennant_df = pd.DataFrame()
+
+    # 将形态数据组织到数据框中
+    hold_mult = 1.0  # 持有期乘数（持有时间 = 旗帜宽度 * 乘数）
+    
+            # 打印牛市旗形形态统计信息
+    print("\n=== 牛市旗形形态统计 ===")
+    print(f"共发现牛市旗形数量: {len(bull_flags)}")
+    # 处理牛市旗形
+    for i, flag in enumerate(bull_flags):
+        # 记录形态属性
+        bull_flag_df.loc[i, 'flag_width'] = flag.flag_width
+        bull_flag_df.loc[i, 'flag_height'] = flag.flag_height
+        bull_flag_df.loc[i, 'pole_width'] = flag.pole_width
+        bull_flag_df.loc[i, 'pole_height'] = flag.pole_height
+        bull_flag_df.loc[i, 'slope'] = flag.resist_slope
+
+        # 计算持有期收益
+        hp = int(flag.flag_width * hold_mult)
+        if flag.conf_x + hp >= len(data):
+            bull_flag_df.loc[i, 'return'] = np.nan
+        else:
+            ret = dat_slice[flag.conf_x + hp] - dat_slice[flag.conf_x]
+            bull_flag_df.loc[i, 'return'] = ret
+
+        # 绘制牛市旗形
+        plot_flag(data, flag)
+
+
+    # if len(bull_flags) > 0:
+    #     print("\n旗形特征统计:")
+    #     print(f"旗形宽度均值: {bull_flag_df['flag_width'].mean():.2f}")
+    #     print(f"旗形高度均值: {bull_flag_df['flag_height'].mean():.2f}")
+    #     print(f"旗杆宽度均值: {bull_flag_df['pole_width'].mean():.2f}")
+    #     print(f"旗杆高度均值: {bull_flag_df['pole_height'].mean():.2f}")
+    #     print(f"旗形斜率均值: {bull_flag_df['slope'].mean():.4f}")
+    #     print(f"\n持有期收益均值: {bull_flag_df['return'].mean():.4f}")
+    #     print(f"持有期收益标准差: {bull_flag_df['return'].std():.4f}")
+
+  
+
+    # 处理熊市旗形
+
+    # 打印熊市旗形形态统计信息
+    print("\n=== 熊市旗形形态统计 ===")
+    print(f"共发现熊市旗形数量: {len(bear_flags)}")
+
+    for i, flag in enumerate(bear_flags):
+        # 记录形态属性
+        bear_flag_df.loc[i, 'flag_width'] = flag.flag_width
+        bear_flag_df.loc[i, 'flag_height'] = flag.flag_height
+        bear_flag_df.loc[i, 'pole_width'] = flag.pole_width
+        bear_flag_df.loc[i, 'pole_height'] = flag.pole_height
+        bear_flag_df.loc[i, 'slope'] = flag.support_slope
+
+        # 计算持有期收益（注意熊市形态是做空，所以收益取负）
+        hp = int(flag.flag_width * hold_mult)
+        if flag.conf_x + hp >= len(data):
+            bear_flag_df.loc[i, 'return'] = np.nan
+        else:
+            ret = -1 * (dat_slice[flag.conf_x + hp] - dat_slice[flag.conf_x])
+            bear_flag_df.loc[i, 'return'] = ret 
+
+        # 绘制熊市旗形
+        plot_flag(data, flag)
+
+
+    # if len(bear_flags) > 0:
+    #     print("\n旗形特征统计:")
+    #     print(f"旗形宽度均值: {bear_flag_df['flag_width'].mean():.2f}")
+    #     print(f"旗形高度均值: {bear_flag_df['flag_height'].mean():.2f}")
+    #     print(f"旗杆宽度均值: {bear_flag_df['pole_width'].mean():.2f}")
+    #     print(f"旗杆高度均值: {bear_flag_df['pole_height'].mean():.2f}")
+    #     print(f"旗形斜率均值: {bear_flag_df['slope'].mean():.4f}")
+    #     print(f"\n持有期收益均值: {bear_flag_df['return'].mean():.4f}")
+    #     print(f"持有期收益标准差: {bear_flag_df['return'].std():.4f}")
+
+                 # 打印牛市三角旗形态统计信息
+    print("\n=== 牛市三角旗形态统计 ===")
+    print(f"共发现牛市三角旗数量: {len(bull_pennants)}")
+    # 处理牛市三角旗
+    for i, pennant in enumerate(bull_pennants):
+        # 记录形态属性
+        bull_pennant_df.loc[i, 'pennant_width'] = pennant.flag_width
+        bull_pennant_df.loc[i, 'pennant_height'] = pennant.flag_height
+        bull_pennant_df.loc[i, 'pole_width'] = pennant.pole_width
+        bull_pennant_df.loc[i, 'pole_height'] = pennant.pole_height
+
+        # 计算持有期收益
+        hp = int(pennant.flag_width * hold_mult)
+        if pennant.conf_x + hp >= len(data):
+            bull_pennant_df.loc[i, 'return'] = np.nan
+        else:
+            ret = dat_slice[pennant.conf_x + hp] - dat_slice[pennant.conf_x]
+            bull_pennant_df.loc[i, 'return'] = ret 
+
+        # 绘制牛市三角旗
+        plot_flag(data, pennant)
+
+
+    # if len(bull_pennants) > 0:
+    #     print("\n三角旗特征统计:")
+    #     print(f"三角旗宽度均值: {bull_pennant_df['pennant_width'].mean():.2f}")
+    #     print(f"三角旗高度均值: {bull_pennant_df['pennant_height'].mean():.2f}")
+    #     print(f"旗杆宽度均值: {bull_pennant_df['pole_width'].mean():.2f}")
+    #     print(f"旗杆高度均值: {bull_pennant_df['pole_height'].mean():.2f}")
+    #     print(f"\n持有期收益均值: {bull_pennant_df['return'].mean():.4f}")
+    #     print(f"持有期收益标准差: {bull_pennant_df['return'].std():.4f}")
+
+
+                         # 打印熊市三角旗形态统计信息
+    print("\n=== 熊市三角旗形态统计 ===")
+    print(f"共发现熊市三角旗数量: {len(bear_pennants)}")
+    # 处理熊市三角旗
+    for i, pennant in enumerate(bear_pennants):
+        # 记录形态属性
+        bear_pennant_df.loc[i, 'pennant_width'] = pennant.flag_width
+        bear_pennant_df.loc[i, 'pennant_height'] = pennant.flag_height
+        bear_pennant_df.loc[i, 'pole_width'] = pennant.pole_width
+        bear_pennant_df.loc[i, 'pole_height'] = pennant.pole_height
+
+        # 计算持有期收益（注意熊市形态是做空，所以收益取负）
+        hp = int(pennant.flag_width * hold_mult)
+        if pennant.conf_x + hp >= len(data):
+            bear_pennant_df.loc[i, 'return'] = np.nan
+        else:
+            ret = -1 * (dat_slice[pennant.conf_x + hp] - dat_slice[pennant.conf_x])
+            bear_pennant_df.loc[i, 'return'] = ret 
+
+        # 绘制熊市三角旗
+        plot_flag(data, pennant)
+
+
+    # if len(bear_pennants) > 0:
+    #     print("\n三角旗特征统计:")
+    #     print(f"三角旗宽度均值: {bear_pennant_df['pennant_width'].mean():.2f}")
+    #     print(f"三角旗高度均值: {bear_pennant_df['pennant_height'].mean():.2f}")
+    #     print(f"旗杆宽度均值: {bear_pennant_df['pole_width'].mean():.2f}")
+    #     print(f"旗杆高度均值: {bear_pennant_df['pole_height'].mean():.2f}")
+    #     print(f"\n持有期收益均值: {bear_pennant_df['return'].mean():.4f}")
+    #     print(f"持有期收益标准差: {bear_pennant_df['return'].std():.4f}")
